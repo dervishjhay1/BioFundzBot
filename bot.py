@@ -22,11 +22,16 @@ logger = logging.getLogger(__name__)
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-STYLE_KEY          = "poster_style"
-CUSTOM_PROMPT_KEY  = "custom_prompt"
-WAITING_PROMPT_KEY = "waiting_for_prompt"
+# ── user_data keys ──────────────────────────────────────────────────────────
+STYLE_KEY         = "style"
+FLOW_KEY          = "flow"          # "prompt_first" | "image_first"
+WAITING_PROMPT    = "waiting_prompt"
+WAITING_IMAGE     = "waiting_image"
+STORED_PHOTO_ID   = "stored_photo_id"
+CUSTOM_PROMPT_KEY = "custom_prompt"
 
-STYLES = {
+# ── style prompts ────────────────────────────────────────────────────────────
+STYLE_BASE = {
     "cinematic": (
         "cinematic Hollywood-style movie poster, dramatic professional lighting, "
         "epic wide-angle composition, photorealistic, blockbuster film aesthetic, "
@@ -56,6 +61,14 @@ STYLE_LABELS = {
     "removebg":  "🪄 Background Removed",
 }
 
+PROMPT_HINTS = {
+    "anime":    "anime style prompt _(e.g. 'Naruto cinematic style', 'Studio Ghibli forest scene')_",
+    "enhance":  "enhancement direction _(e.g. 'sharp face detail, golden hour lighting')_",
+    "removebg": "background replacement _(e.g. 'futuristic city', 'white studio background')_",
+}
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def feedback_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
@@ -77,25 +90,23 @@ async def generate_poster(image_bytes: bytes, style_prompt: str) -> bytes:
     vision_resp = openai_client.chat.completions.create(
         model="gpt-4o",
         max_tokens=512,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Describe the main subject and scene in this image in vivid detail "
-                            f"for use as a reference in generating a styled image. "
-                            f"Target style: '{style_prompt}'"
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                    },
-                ],
-            }
-        ],
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Describe the main subject and scene in this image in vivid detail "
+                        f"for use as a reference in generating a styled image. "
+                        f"Target style: '{style_prompt}'"
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                },
+            ],
+        }],
     )
 
     scene = vision_resp.choices[0].message.content
@@ -118,6 +129,22 @@ async def generate_poster(image_bytes: bytes, style_prompt: str) -> bytes:
 
     return base64.standard_b64decode(image_resp.data[0].b64_json)
 
+
+async def send_result(update_or_message, image_bytes: bytes, style_label: str) -> None:
+    msg = update_or_message if hasattr(update_or_message, "reply_photo") else update_or_message.message
+    await msg.reply_photo(
+        photo=io.BytesIO(image_bytes),
+        caption=(
+            f"✅ *Done!* Style: {style_label}\n\n"
+            "How did I do? Rate your result below!\n"
+            "Try another: /cinematic | /anime | /enhance | /removebg"
+        ),
+        parse_mode="Markdown",
+        reply_markup=feedback_keyboard(),
+    )
+
+
+# ── commands ──────────────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.clear()
@@ -143,16 +170,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/help — Show all commands with explanations\n"
         "/about — About Bio Fundz Bot\n\n"
         "*AI Editing Styles:*\n"
-        "/cinematic — 🎬 Transform photos into cinematic Hollywood-style movie posters\n"
-        "/anime — 🌸 Convert photos into anime or manga-inspired artwork\n"
-        "/enhance — ✨ HD upscaling, face enhancement & lighting correction\n"
-        "/removebg — 🪄 Remove image background, return clean white version\n\n"
-        "*How to use:*\n"
-        "1️⃣ Choose a style with one of the commands above\n"
-        "2️⃣ For /cinematic, describe your vision when prompted\n"
-        "3️⃣ Send any photo\n"
-        "4️⃣ Receive your AI-generated result 🎨\n\n"
-        "_Tip: Send a photo with a caption to use your own custom style!_",
+        "/cinematic — 🎬 Describe your vision → send photo → get poster\n"
+        "/anime — 🌸 Send photo → describe style → get anime art\n"
+        "/enhance — ✨ Send photo → describe enhancement → get HD result\n"
+        "/removebg — 🪄 Send photo → describe new bg → get clean cutout\n\n"
+        "_Tip: Send a photo with a caption at any time for a quick custom style!_",
         parse_mode="Markdown",
     )
 
@@ -173,107 +195,172 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Prompt-first flow: ask for prompt → then photo."""
+    context.user_data.clear()
     context.user_data[STYLE_KEY] = "cinematic"
-    context.user_data[WAITING_PROMPT_KEY] = True
-    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
+    context.user_data[FLOW_KEY] = "prompt_first"
+    context.user_data[WAITING_PROMPT] = True
     await update.message.reply_text(
         "🎬 *Cinematic Mode activated!*\n\n"
-        "What's your cinematic vision? Describe the style or mood you want "
+        "What's your cinematic vision? Describe the style or mood you want:\n"
         "_(e.g. 'dark noir thriller', 'epic sci-fi adventure', 'romantic golden sunset')_\n\n"
-        "Type your prompt below 👇",
+        "Type your prompt 👇",
+        parse_mode="Markdown",
+    )
+
+
+async def _image_first_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, style: str
+) -> None:
+    """Image-first flow: ask for photo → then prompt."""
+    context.user_data.clear()
+    context.user_data[STYLE_KEY] = style
+    context.user_data[FLOW_KEY] = "image_first"
+    context.user_data[WAITING_IMAGE] = True
+    labels = {
+        "anime":    "🌸 *Anime Mode activated!*",
+        "enhance":  "✨ *Enhance Mode activated!*",
+        "removebg": "🪄 *Remove Background Mode activated!*",
+    }
+    await update.message.reply_text(
+        f"{labels[style]}\n\nSend me your image 📷",
         parse_mode="Markdown",
     )
 
 
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data[STYLE_KEY] = "anime"
-    context.user_data.pop(WAITING_PROMPT_KEY, None)
-    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
-    await update.message.reply_text(
-        "🌸 *Anime Mode activated!*\n\n"
-        "I'll convert your photo into anime or manga-inspired artwork.\n"
-        "Send me any photo to get started!",
-        parse_mode="Markdown",
-    )
+    await _image_first_command(update, context, "anime")
 
 
 async def enhance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data[STYLE_KEY] = "enhance"
-    context.user_data.pop(WAITING_PROMPT_KEY, None)
-    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
-    await update.message.reply_text(
-        "✨ *Enhance Mode activated!*\n\n"
-        "I'll apply HD upscaling, face enhancement, lighting correction, "
-        "and sharper details to your photo.\n"
-        "Send me any photo to enhance it!",
-        parse_mode="Markdown",
-    )
+    await _image_first_command(update, context, "enhance")
 
 
 async def removebg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data[STYLE_KEY] = "removebg"
-    context.user_data.pop(WAITING_PROMPT_KEY, None)
-    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
-    await update.message.reply_text(
-        "🪄 *Remove Background Mode activated!*\n\n"
-        "I'll automatically remove the background from your image "
-        "and return a clean white background version.\n"
-        "Send me any photo to process it!",
-        parse_mode="Markdown",
-    )
+    await _image_first_command(update, context, "removebg")
 
+
+# ── message handlers ──────────────────────────────────────────────────────────
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.user_data.get(WAITING_PROMPT_KEY):
+    flow = context.user_data.get(FLOW_KEY)
+    style = context.user_data.get(STYLE_KEY)
+
+    # ── cinematic: collecting prompt before photo ──
+    if flow == "prompt_first" and context.user_data.get(WAITING_PROMPT):
+        prompt = update.message.text.strip()
+        context.user_data[CUSTOM_PROMPT_KEY] = prompt
+        context.user_data[WAITING_PROMPT] = False
+        context.user_data[WAITING_IMAGE] = True
         await update.message.reply_text(
-            "Send me a photo to get started, or pick a style first:\n"
-            "/cinematic | /anime | /enhance | /removebg"
+            f"✅ Got it — *\"{prompt}\"*\n\nNow send me your photo 📷",
+            parse_mode="Markdown",
         )
         return
 
-    user_prompt = update.message.text.strip()
-    context.user_data[CUSTOM_PROMPT_KEY] = user_prompt
-    context.user_data[WAITING_PROMPT_KEY] = False
+    # ── image-first styles: collecting prompt after photo ──
+    if flow == "image_first" and context.user_data.get(WAITING_PROMPT):
+        prompt = update.message.text.strip()
+        context.user_data[CUSTOM_PROMPT_KEY] = prompt
+        context.user_data[WAITING_PROMPT] = False
 
+        photo_id = context.user_data.get(STORED_PHOTO_ID)
+        if not photo_id:
+            await update.message.reply_text("⚠️ Something went wrong. Please start over with /anime.")
+            context.user_data.clear()
+            return
+
+        await update.message.reply_text("🎨 Generating… this takes ~15 seconds. Please wait!")
+
+        tg_file = await context.bot.get_file(photo_id)
+        image_bytes = await download_telegram_image(tg_file)
+
+        base_style = STYLE_BASE.get(style, STYLE_BASE["anime"])
+        style_prompt = f"{prompt}. Rendered as {base_style}"
+        style_label = f"{STYLE_LABELS.get(style, style)} — \"{prompt}\""
+
+        try:
+            poster_bytes = await generate_poster(image_bytes, style_prompt)
+        except Exception as e:
+            logger.error("Generation failed: %s", e)
+            await update.message.reply_text("❌ Generation failed. Please try again.")
+            context.user_data.clear()
+            return
+
+        context.user_data.clear()
+        await send_result(update.message, poster_bytes, style_label)
+        return
+
+    # ── no active flow ──
     await update.message.reply_text(
-        f"✅ Got it! *\"{user_prompt}\"*\n\n"
-        "Now send me your photo and I'll generate your cinematic poster! 📷",
+        "Pick a style to get started:\n"
+        "/cinematic | /anime | /enhance | /removebg\n\n"
+        "_Or just send a photo with a caption for a quick custom style!_",
         parse_mode="Markdown",
     )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get(WAITING_PROMPT_KEY):
+    flow = context.user_data.get(FLOW_KEY)
+    style = context.user_data.get(STYLE_KEY)
+
+    # ── cinematic prompt-first: waiting for photo after prompt collected ──
+    if flow == "prompt_first" and context.user_data.get(WAITING_IMAGE):
+        custom_prompt = context.user_data.get(CUSTOM_PROMPT_KEY, "")
+        style_prompt = f"{custom_prompt}. Rendered as {STYLE_BASE['cinematic']}"
+        style_label = f"🎬 Cinematic — \"{custom_prompt}\""
+
+        await update.message.reply_text("🎨 Generating… this takes ~15 seconds. Please wait!")
+
+        photo = update.message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+        image_bytes = await download_telegram_image(tg_file)
+
+        try:
+            poster_bytes = await generate_poster(image_bytes, style_prompt)
+        except Exception as e:
+            logger.error("Generation failed: %s", e)
+            await update.message.reply_text("❌ Generation failed. Please try again.")
+            context.user_data.clear()
+            return
+
+        context.user_data.clear()
+        await send_result(update.message, poster_bytes, style_label)
+        return
+
+    # ── cinematic prompt-first: still waiting for prompt ──
+    if flow == "prompt_first" and context.user_data.get(WAITING_PROMPT):
         await update.message.reply_text(
-            "Please describe your cinematic prompt first — just type it as a message! 🎬"
+            "Please type your cinematic prompt first, then send the photo 🎬"
         )
         return
 
-    style_name = context.user_data.get(STYLE_KEY)
-    custom_prompt = context.user_data.get(CUSTOM_PROMPT_KEY)
+    # ── image-first: waiting for the initial image ──
+    if flow == "image_first" and context.user_data.get(WAITING_IMAGE):
+        photo = update.message.photo[-1]
+        context.user_data[STORED_PHOTO_ID] = photo.file_id
+        context.user_data[WAITING_IMAGE] = False
+        context.user_data[WAITING_PROMPT] = True
 
-    if style_name == "cinematic" and custom_prompt:
-        style_prompt = (
-            f"{custom_prompt}. "
-            f"Rendered as a {STYLES['cinematic']}"
+        hint = PROMPT_HINTS.get(style, "your style prompt")
+        await update.message.reply_text(
+            f"📷 Image received!\n\nNow send your {hint} 👇",
+            parse_mode="Markdown",
         )
-        style_label = f"🎬 Cinematic — \"{custom_prompt}\""
-    elif style_name and style_name in STYLES:
-        style_prompt = STYLES[style_name]
-        style_label = STYLE_LABELS[style_name]
-    elif update.message.caption:
+        return
+
+    # ── no active flow: use caption or default cinematic style ──
+    if update.message.caption:
         style_prompt = (
             f"{update.message.caption}, cinematic composition, "
             "professional quality, visually stunning, high detail"
         )
         style_label = f'Custom: "{update.message.caption}"'
     else:
-        style_prompt = STYLES["cinematic"]
+        style_prompt = STYLE_BASE["cinematic"]
         style_label = STYLE_LABELS["cinematic"]
 
-    await update.message.reply_text(
-        "🎨 Generating your AI image… this takes ~15 seconds. Please wait!"
-    )
+    await update.message.reply_text("🎨 Generating… this takes ~15 seconds. Please wait!")
 
     photo = update.message.photo[-1]
     tg_file = await context.bot.get_file(photo.file_id)
@@ -282,26 +369,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         poster_bytes = await generate_poster(image_bytes, style_prompt)
     except Exception as e:
-        logger.error("Image generation failed: %s", e)
-        await update.message.reply_text(
-            "❌ Something went wrong generating your image. Please try again.\n"
-            "If the problem persists, try a different style or photo."
-        )
+        logger.error("Generation failed: %s", e)
+        await update.message.reply_text("❌ Generation failed. Please try again.")
         return
 
-    context.user_data.pop(STYLE_KEY, None)
-    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
-
-    await update.message.reply_photo(
-        photo=io.BytesIO(poster_bytes),
-        caption=(
-            f"✅ *Done!* Style: {style_label}\n\n"
-            "How did I do? Rate your result below!\n"
-            "Send another photo or pick a new style with /cinematic, /anime, /enhance, or /removebg"
-        ),
-        parse_mode="Markdown",
-        reply_markup=feedback_keyboard(),
-    )
+    await send_result(update.message, poster_bytes, style_label)
 
 
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -312,17 +384,19 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info("User %s rated 👍", query.from_user.id)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            "🙏 Thanks for the feedback! Glad you loved it.\n"
+            "🙏 Thanks! Glad you loved it.\n"
             "Try another style: /cinematic | /anime | /enhance | /removebg"
         )
     elif query.data == "feedback_down":
         logger.info("User %s rated 👎", query.from_user.id)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            "😔 Sorry it didn't hit the mark! Try a different style or add a more detailed prompt.\n"
+            "😔 Sorry it didn't hit the mark! Try a different style or a more detailed prompt.\n"
             "/cinematic | /anime | /enhance | /removebg"
         )
 
+
+# ── startup ───────────────────────────────────────────────────────────────────
 
 async def post_init(app) -> None:
     await app.bot.set_my_commands([

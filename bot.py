@@ -4,11 +4,12 @@ import logging
 import base64
 import httpx
 from openai import OpenAI
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -21,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-STYLE_KEY = "poster_style"
+STYLE_KEY          = "poster_style"
+CUSTOM_PROMPT_KEY  = "custom_prompt"
+WAITING_PROMPT_KEY = "waiting_for_prompt"
 
 STYLES = {
     "cinematic": (
@@ -52,6 +55,13 @@ STYLE_LABELS = {
     "enhance":   "✨ HD Enhanced",
     "removebg":  "🪄 Background Removed",
 }
+
+
+def feedback_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("👍 Great!", callback_data="feedback_up"),
+        InlineKeyboardButton("👎 Not good", callback_data="feedback_down"),
+    ]])
 
 
 async def download_telegram_image(tg_file) -> bytes:
@@ -110,7 +120,7 @@ async def generate_poster(image_bytes: bytes, style_prompt: str) -> bytes:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data.pop(STYLE_KEY, None)
+    context.user_data.clear()
     await update.message.reply_text(
         "🚀 *Welcome to Bio Fundz Bot!*\n\n"
         "I transform your photos into stunning AI-generated artwork using "
@@ -139,8 +149,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/removebg — 🪄 Remove image background, return clean white version\n\n"
         "*How to use:*\n"
         "1️⃣ Choose a style with one of the commands above\n"
-        "2️⃣ Send any photo\n"
-        "3️⃣ Receive your AI-generated result 🎨\n\n"
+        "2️⃣ For /cinematic, describe your vision when prompted\n"
+        "3️⃣ Send any photo\n"
+        "4️⃣ Receive your AI-generated result 🎨\n\n"
         "_Tip: Send a photo with a caption to use your own custom style!_",
         parse_mode="Markdown",
     )
@@ -161,57 +172,93 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def set_style_handler(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, style_name: str
-) -> None:
-    context.user_data[STYLE_KEY] = style_name
-    messages = {
-        "cinematic": (
-            "🎬 *Cinematic Mode activated!*\n\n"
-            "I'll transform your photo into a Hollywood-style movie poster.\n"
-            "You can add a caption with your custom prompt, or just send the photo!"
-        ),
-        "anime": (
-            "🌸 *Anime Mode activated!*\n\n"
-            "I'll convert your photo into anime or manga-inspired artwork.\n"
-            "Send me any photo to get started!"
-        ),
-        "enhance": (
-            "✨ *Enhance Mode activated!*\n\n"
-            "I'll apply HD upscaling, face enhancement, lighting correction, "
-            "and sharper details to your photo.\n"
-            "Send me any photo to enhance it!"
-        ),
-        "removebg": (
-            "🪄 *Remove Background Mode activated!*\n\n"
-            "I'll automatically remove the background from your image "
-            "and return a clean white background version.\n"
-            "Send me any photo to process it!"
-        ),
-    }
-    await update.message.reply_text(messages[style_name], parse_mode="Markdown")
-
-
 async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style_handler(update, context, "cinematic")
+    context.user_data[STYLE_KEY] = "cinematic"
+    context.user_data[WAITING_PROMPT_KEY] = True
+    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
+    await update.message.reply_text(
+        "🎬 *Cinematic Mode activated!*\n\n"
+        "What's your cinematic vision? Describe the style or mood you want "
+        "_(e.g. 'dark noir thriller', 'epic sci-fi adventure', 'romantic golden sunset')_\n\n"
+        "Type your prompt below 👇",
+        parse_mode="Markdown",
+    )
 
 
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style_handler(update, context, "anime")
+    context.user_data[STYLE_KEY] = "anime"
+    context.user_data.pop(WAITING_PROMPT_KEY, None)
+    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
+    await update.message.reply_text(
+        "🌸 *Anime Mode activated!*\n\n"
+        "I'll convert your photo into anime or manga-inspired artwork.\n"
+        "Send me any photo to get started!",
+        parse_mode="Markdown",
+    )
 
 
 async def enhance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style_handler(update, context, "enhance")
+    context.user_data[STYLE_KEY] = "enhance"
+    context.user_data.pop(WAITING_PROMPT_KEY, None)
+    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
+    await update.message.reply_text(
+        "✨ *Enhance Mode activated!*\n\n"
+        "I'll apply HD upscaling, face enhancement, lighting correction, "
+        "and sharper details to your photo.\n"
+        "Send me any photo to enhance it!",
+        parse_mode="Markdown",
+    )
 
 
 async def removebg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style_handler(update, context, "removebg")
+    context.user_data[STYLE_KEY] = "removebg"
+    context.user_data.pop(WAITING_PROMPT_KEY, None)
+    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
+    await update.message.reply_text(
+        "🪄 *Remove Background Mode activated!*\n\n"
+        "I'll automatically remove the background from your image "
+        "and return a clean white background version.\n"
+        "Send me any photo to process it!",
+        parse_mode="Markdown",
+    )
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.user_data.get(WAITING_PROMPT_KEY):
+        await update.message.reply_text(
+            "Send me a photo to get started, or pick a style first:\n"
+            "/cinematic | /anime | /enhance | /removebg"
+        )
+        return
+
+    user_prompt = update.message.text.strip()
+    context.user_data[CUSTOM_PROMPT_KEY] = user_prompt
+    context.user_data[WAITING_PROMPT_KEY] = False
+
+    await update.message.reply_text(
+        f"✅ Got it! *\"{user_prompt}\"*\n\n"
+        "Now send me your photo and I'll generate your cinematic poster! 📷",
+        parse_mode="Markdown",
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    style_name = context.user_data.get(STYLE_KEY)
+    if context.user_data.get(WAITING_PROMPT_KEY):
+        await update.message.reply_text(
+            "Please describe your cinematic prompt first — just type it as a message! 🎬"
+        )
+        return
 
-    if style_name and style_name in STYLES:
+    style_name = context.user_data.get(STYLE_KEY)
+    custom_prompt = context.user_data.get(CUSTOM_PROMPT_KEY)
+
+    if style_name == "cinematic" and custom_prompt:
+        style_prompt = (
+            f"{custom_prompt}. "
+            f"Rendered as a {STYLES['cinematic']}"
+        )
+        style_label = f"🎬 Cinematic — \"{custom_prompt}\""
+    elif style_name and style_name in STYLES:
         style_prompt = STYLES[style_name]
         style_label = STYLE_LABELS[style_name]
     elif update.message.caption:
@@ -243,15 +290,38 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     context.user_data.pop(STYLE_KEY, None)
+    context.user_data.pop(CUSTOM_PROMPT_KEY, None)
 
     await update.message.reply_photo(
         photo=io.BytesIO(poster_bytes),
         caption=(
             f"✅ *Done!* Style: {style_label}\n\n"
+            "How did I do? Rate your result below!\n"
             "Send another photo or pick a new style with /cinematic, /anime, /enhance, or /removebg"
         ),
         parse_mode="Markdown",
+        reply_markup=feedback_keyboard(),
     )
+
+
+async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "feedback_up":
+        logger.info("User %s rated 👍", query.from_user.id)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "🙏 Thanks for the feedback! Glad you loved it.\n"
+            "Try another style: /cinematic | /anime | /enhance | /removebg"
+        )
+    elif query.data == "feedback_down":
+        logger.info("User %s rated 👎", query.from_user.id)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "😔 Sorry it didn't hit the mark! Try a different style or add a more detailed prompt.\n"
+            "/cinematic | /anime | /enhance | /removebg"
+        )
 
 
 async def post_init(app) -> None:
@@ -282,6 +352,8 @@ def main() -> None:
     app.add_handler(CommandHandler("enhance",   enhance))
     app.add_handler(CommandHandler("removebg",  removebg))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CallbackQueryHandler(handle_feedback, pattern="^feedback_"))
 
     logger.info("Bio Fundz Bot starting...")
     app.run_polling()

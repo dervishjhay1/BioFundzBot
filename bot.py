@@ -34,9 +34,10 @@ openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 ADMIN_ID = int(os.environ.get("ADMIN_USER_ID", "0"))
 
 FREE_DAILY_LIMIT = 3
-DATA_DIR = Path("data")
+DATA_DIR   = Path("data")
 USAGE_FILE = DATA_DIR / "usage.json"
 VIP_FILE   = DATA_DIR / "vip.json"
+USERS_FILE = DATA_DIR / "users.json"
 DATA_DIR.mkdir(exist_ok=True)
 
 # ── user_data keys ────────────────────────────────────────────────────────────
@@ -78,6 +79,14 @@ STYLE_LABELS = {
     "removebg":  "🪄 Background Removed",
 }
 
+GENERATING_MSGS = {
+    "cinematic": "🎬 *Creating your cinematic masterpiece…*\nHollywood magic incoming — ~15 secs!",
+    "anime":     "🌸 *Drawing your anime artwork…*\nBringing your scene to life — ~15 secs!",
+    "enhance":   "✨ *Enhancing your image to HD…*\nSharpening every detail — ~15 secs!",
+    "removebg":  "🪄 *Removing background…*\nCleaning up your image — ~15 secs!",
+    "default":   "🎨 *Generating your AI image…*\nThis takes ~15 seconds. Please wait!",
+}
+
 PROMPT_HINTS = {
     "anime":    "anime style prompt _(e.g. 'Naruto cinematic style', 'Studio Ghibli forest scene')_",
     "enhance":  "enhancement direction _(e.g. 'sharp face detail, golden hour lighting')_",
@@ -115,6 +124,12 @@ def remove_vip(user_id: int) -> None:
     vip = _load_json(VIP_FILE)
     vip.pop(str(user_id), None)
     _save_json(VIP_FILE, vip)
+
+
+def track_user(user_id: int, username: str | None, full_name: str) -> None:
+    users = _load_json(USERS_FILE)
+    users[str(user_id)] = {"username": username, "name": full_name}
+    _save_json(USERS_FILE, users)
 
 
 def get_usage(user_id: int) -> int:
@@ -271,10 +286,9 @@ async def run_generation(
         )
         return
 
-    await message.reply_text(
-        "🎨 *Generating your AI image…*\nThis takes ~15 seconds. Please wait!",
-        parse_mode="Markdown",
-    )
+    style = context.user_data.get(STYLE_KEY, "default")
+    gen_msg = GENERATING_MSGS.get(style, GENERATING_MSGS["default"])
+    await message.reply_text(gen_msg, parse_mode="Markdown")
 
     try:
         poster_bytes = await generate_poster(image_bytes, style_prompt)
@@ -308,10 +322,11 @@ async def run_generation(
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.clear()
     user = update.effective_user
+    track_user(user.id, user.username, user.full_name)
     vip_badge = " ⭐ VIP" if is_vip(user.id) or user.id == ADMIN_ID else ""
     left = remaining(user.id)
     await update.message.reply_text(
-        f"🚀 *Welcome to Bio Fundz Bot!*{vip_badge}\n\n"
+        f"🚀 *Welcome to Biodun Fundz Bot!*{vip_badge}\n\n"
         "Transform your photos into stunning AI artwork using GPT-4o & DALL-E 3.\n\n"
         "*Choose a style below or tap a button:*\n"
         "🎬 Cinematic — Hollywood movie poster\n"
@@ -326,7 +341,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "📖 *Bio Fundz Bot — How to Use*\n\n"
+        "📖 *Biodun Fundz Bot — How to Use*\n\n"
         "*Styles:*\n"
         "🎬 /cinematic — type prompt → send photo\n"
         "🌸 /anime — send photo → type style\n"
@@ -347,14 +362,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🌍 *About Bio Fundz Bot*\n\n"
+        "🌍 *About Biodun Fundz Bot*\n\n"
         "An AI-powered image transformation tool that turns everyday photos "
         "into professional-grade artwork.\n\n"
         "*Mission:* Make AI image generation accessible to everyone.\n\n"
         "*Powered by:*\n"
         "• GPT-4o Vision — understands your photos\n"
         "• DALL-E 3 — generates stunning artwork\n\n"
-        "Created with ❤️ by *Bio Fundz*",
+        "Created with ❤️ by *Biodun Fundz*",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -434,6 +449,69 @@ async def listvip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     ids = "\n".join(f"• {uid}" for uid in vip)
     await update.message.reply_text(f"⭐ *VIP Users:*\n{ids}", parse_mode="Markdown")
+
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Admin only.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /broadcast <message>\n\nExample:\n/broadcast 🎉 New styles dropping soon!"
+        )
+        return
+
+    msg_text = " ".join(context.args)
+    users = _load_json(USERS_FILE)
+    if not users:
+        await update.message.reply_text("No users to broadcast to yet.")
+        return
+
+    sent = failed = 0
+    status_msg = await update.message.reply_text(
+        f"📡 Broadcasting to {len(users)} users…"
+    )
+
+    for uid in users:
+        try:
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text=f"📢 *Message from Biodun Fundz Bot:*\n\n{msg_text}",
+                parse_mode="Markdown",
+            )
+            sent += 1
+        except Exception as e:
+            logger.warning("Broadcast failed for %s: %s", uid, e)
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ *Broadcast complete!*\n\n"
+        f"📬 Sent: {sent}\n"
+        f"❌ Failed: {failed}\n"
+        f"👥 Total users: {len(users)}",
+        parse_mode="Markdown",
+    )
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Admin only.")
+        return
+    users = _load_json(USERS_FILE)
+    vip   = _load_json(VIP_FILE)
+    usage = _load_json(USAGE_FILE)
+    today = str(date.today())
+    active_today = sum(
+        1 for u in usage.values()
+        if today in u and u[today] > 0
+    )
+    await update.message.reply_text(
+        f"📊 *Bot Statistics*\n\n"
+        f"👥 Total users: {len(users)}\n"
+        f"⭐ VIP users: {len(vip)}\n"
+        f"🔥 Active today: {active_today}",
+        parse_mode="Markdown",
+    )
 
 
 # ── style activation helpers ──────────────────────────────────────────────────
@@ -692,13 +770,18 @@ async def post_init(app) -> None:
     await app.bot.set_my_commands([
         BotCommand("start",     "🚀 Welcome & reset"),
         BotCommand("help",      "📖 How to use the bot"),
-        BotCommand("about",     "🌍 About Bio Fundz Bot"),
+        BotCommand("about",     "🌍 About Biodun Fundz Bot"),
         BotCommand("status",    "📊 Check your usage & VIP status"),
         BotCommand("cinematic", "🎬 Hollywood movie poster"),
         BotCommand("anime",     "🌸 Anime & manga artwork"),
         BotCommand("enhance",   "✨ HD upscale & enhancement"),
         BotCommand("removebg",  "🪄 Remove image background"),
         BotCommand("cancel",    "❌ Cancel current action"),
+        BotCommand("broadcast", "📡 Send message to all users (admin)"),
+        BotCommand("stats",     "📊 Bot usage statistics (admin)"),
+        BotCommand("addvip",    "⭐ Grant VIP to user (admin)"),
+        BotCommand("removevip", "🚫 Revoke VIP from user (admin)"),
+        BotCommand("listvip",   "📋 List all VIP users (admin)"),
     ])
     logger.info("Bot commands registered with Telegram")
 
@@ -722,11 +805,13 @@ def main() -> None:
     app.add_handler(CommandHandler("addvip",    addvip))
     app.add_handler(CommandHandler("removevip", removevip))
     app.add_handler(CommandHandler("listvip",   listvip))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("stats",     stats))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Bio Fundz Bot starting...")
+    logger.info("Biodun Fundz Bot starting...")
     app.run_polling()
 
 

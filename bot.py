@@ -194,6 +194,21 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data:
+        context.user_data.clear()
+        await update.message.reply_text(
+            "❌ Cancelled! Everything has been reset.\n\n"
+            "Pick a style whenever you're ready:\n"
+            "/cinematic | /anime | /enhance | /removebg"
+        )
+    else:
+        await update.message.reply_text(
+            "Nothing to cancel. Pick a style to get started:\n"
+            "/cinematic | /anime | /enhance | /removebg"
+        )
+
+
 async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Prompt-first flow: ask for prompt → then photo."""
     context.user_data.clear()
@@ -407,6 +422,7 @@ async def post_init(app) -> None:
         BotCommand("anime",     "🌸 Anime & manga artwork from your photo"),
         BotCommand("enhance",   "✨ HD upscale, face & lighting enhancement"),
         BotCommand("removebg",  "🪄 Remove background, clean white version"),
+        BotCommand("cancel",    "❌ Cancel current action & reset"),
     ])
     logger.info("Bot commands registered with Telegram")
 
@@ -425,6 +441,7 @@ def main() -> None:
     app.add_handler(CommandHandler("anime",     anime))
     app.add_handler(CommandHandler("enhance",   enhance))
     app.add_handler(CommandHandler("removebg",  removebg))
+    app.add_handler(CommandHandler("cancel",    cancel))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_feedback, pattern="^feedback_"))

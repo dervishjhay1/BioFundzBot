@@ -25,21 +25,32 @@ STYLE_KEY = "poster_style"
 
 STYLES = {
     "cinematic": (
-        "cinematic movie poster, dramatic lighting, epic composition, "
-        "photorealistic, Hollywood blockbuster style, 8K quality"
+        "cinematic Hollywood-style movie poster, dramatic professional lighting, "
+        "epic wide-angle composition, photorealistic, blockbuster film aesthetic, "
+        "rich color grading, lens flare, depth of field, 8K quality"
     ),
     "anime": (
-        "anime movie poster style, vibrant colors, Studio Ghibli or Makoto Shinkai aesthetic, "
-        "hand-drawn look, beautiful detailed illustration"
+        "anime and manga-inspired artwork, vibrant saturated colors, "
+        "Studio Ghibli or Makoto Shinkai aesthetic, expressive hand-drawn illustration style, "
+        "clean linework, beautiful detailed cel-shading, dynamic composition"
     ),
     "enhance": (
-        "ultra high-resolution enhanced version, crystal clear details, "
-        "professional photography, studio lighting, stunning realism"
+        "ultra high-resolution HD upscaled version, enhanced facial features and skin detail, "
+        "professional studio lighting correction, noise reduction, sharper crisp details, "
+        "color vibrancy boost, photorealistic remaster quality"
     ),
     "removebg": (
-        "subject isolated on a clean white background, no background, "
-        "product photography style, sharp edges, professional cutout"
+        "subject isolated cleanly with a pure white background, all original background completely removed, "
+        "sharp precise edges around subject, professional product photography cutout style, "
+        "no shadows or artifacts from original background"
     ),
+}
+
+STYLE_LABELS = {
+    "cinematic": "🎬 Cinematic Hollywood Poster",
+    "anime":     "🌸 Anime / Manga Art",
+    "enhance":   "✨ HD Enhanced",
+    "removebg":  "🪄 Background Removed",
 }
 
 
@@ -64,7 +75,7 @@ async def generate_poster(image_bytes: bytes, style_prompt: str) -> bytes:
                         "type": "text",
                         "text": (
                             f"Describe the main subject and scene in this image in vivid detail "
-                            f"for use as a reference in generating a styled poster. "
+                            f"for use as a reference in generating a styled image. "
                             f"Target style: '{style_prompt}'"
                         ),
                     },
@@ -80,14 +91,15 @@ async def generate_poster(image_bytes: bytes, style_prompt: str) -> bytes:
     scene = vision_resp.choices[0].message.content
     logger.info("Scene description: %s", scene)
 
-    poster_prompt = (
-        f"{style_prompt}. Scene: {scene}. "
-        "Professional composition, visually stunning, high contrast, masterpiece quality."
+    full_prompt = (
+        f"{style_prompt}. "
+        f"Scene reference: {scene}. "
+        "Professional composition, visually stunning, masterpiece quality."
     )
 
     image_resp = openai_client.images.generate(
         model="dall-e-3",
-        prompt=poster_prompt,
+        prompt=full_prompt,
         size="1024x1792",
         quality="standard",
         n=1,
@@ -100,65 +112,100 @@ async def generate_poster(image_bytes: bytes, style_prompt: str) -> bytes:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(STYLE_KEY, None)
     await update.message.reply_text(
-        "Bio Fundz Bot is online 🚀\n\n"
-        "Send me a photo (with an optional caption) and I'll generate a cinematic AI poster.\n\n"
-        "Or pick a style first with /cinematic, /anime, /enhance, or /removebg — "
-        "then send your photo!"
+        "🚀 *Welcome to Bio Fundz Bot!*\n\n"
+        "I transform your photos into stunning AI-generated artwork using "
+        "GPT-4o vision and DALL-E 3.\n\n"
+        "*What I can do:*\n"
+        "🎬 /cinematic — Hollywood-style movie posters\n"
+        "🌸 /anime — Anime & manga-inspired artwork\n"
+        "✨ /enhance — HD upscale & quality enhancement\n"
+        "🪄 /removebg — Remove image backgrounds\n\n"
+        "Pick a style, send me a photo, and I'll create your masterpiece!\n"
+        "You can also send a photo with a custom caption for a personalized style.",
+        parse_mode="Markdown",
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "📋 *Available Commands*\n\n"
-        "/start — Welcome message & reset style\n"
-        "/help — Show this help message\n"
-        "/about — About Bio Fundz Bot\n"
-        "/cinematic — Set style: Hollywood movie poster 🎬\n"
-        "/anime — Set style: Anime illustration 🌸\n"
-        "/enhance — Set style: Ultra-HD enhancement ✨\n"
-        "/removebg — Set style: Clean white background 🪄\n\n"
-        "After picking a style, send any photo to generate your poster!",
+        "📖 *Bio Fundz Bot — Commands*\n\n"
+        "/start — Welcome message & reset selected style\n"
+        "/help — Show all commands with explanations\n"
+        "/about — About Bio Fundz Bot\n\n"
+        "*AI Editing Styles:*\n"
+        "/cinematic — 🎬 Transform photos into cinematic Hollywood-style movie posters\n"
+        "/anime — 🌸 Convert photos into anime or manga-inspired artwork\n"
+        "/enhance — ✨ HD upscaling, face enhancement & lighting correction\n"
+        "/removebg — 🪄 Remove image background, return clean white version\n\n"
+        "*How to use:*\n"
+        "1️⃣ Choose a style with one of the commands above\n"
+        "2️⃣ Send any photo\n"
+        "3️⃣ Receive your AI-generated result 🎨\n\n"
+        "_Tip: Send a photo with a caption to use your own custom style!_",
         parse_mode="Markdown",
     )
 
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🤖 *Bio Fundz Bot*\n\n"
-        "Transform your photos into stunning AI-generated posters using "
-        "GPT-4o vision and DALL-E 3.\n\n"
-        "Choose a style, send a photo, get your masterpiece. 🎨",
+        "🌍 *About Bio Fundz Bot*\n\n"
+        "Bio Fundz Bot is an AI-powered image transformation tool built to help "
+        "creators, brands, and individuals turn everyday photos into professional-grade artwork.\n\n"
+        "*Mission:*\n"
+        "Make advanced AI image generation accessible to everyone — no design skills required.\n\n"
+        "*Powered by:*\n"
+        "• GPT-4o Vision — understands your photos\n"
+        "• DALL-E 3 — generates stunning AI artwork\n\n"
+        "Created with ❤️ by Bio Fundz.",
         parse_mode="Markdown",
     )
 
 
-async def set_style(update: Update, context: ContextTypes.DEFAULT_TYPE, style_name: str) -> None:
+async def set_style_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, style_name: str
+) -> None:
     context.user_data[STYLE_KEY] = style_name
-    labels = {
-        "cinematic": "🎬 Cinematic movie poster",
-        "anime": "🌸 Anime illustration",
-        "enhance": "✨ Ultra-HD enhancement",
-        "removebg": "🪄 White background cutout",
+    messages = {
+        "cinematic": (
+            "🎬 *Cinematic Mode activated!*\n\n"
+            "I'll transform your photo into a Hollywood-style movie poster.\n"
+            "You can add a caption with your custom prompt, or just send the photo!"
+        ),
+        "anime": (
+            "🌸 *Anime Mode activated!*\n\n"
+            "I'll convert your photo into anime or manga-inspired artwork.\n"
+            "Send me any photo to get started!"
+        ),
+        "enhance": (
+            "✨ *Enhance Mode activated!*\n\n"
+            "I'll apply HD upscaling, face enhancement, lighting correction, "
+            "and sharper details to your photo.\n"
+            "Send me any photo to enhance it!"
+        ),
+        "removebg": (
+            "🪄 *Remove Background Mode activated!*\n\n"
+            "I'll automatically remove the background from your image "
+            "and return a clean white background version.\n"
+            "Send me any photo to process it!"
+        ),
     }
-    await update.message.reply_text(
-        f"{labels[style_name]} style selected!\n\nNow send me a photo to generate your poster."
-    )
+    await update.message.reply_text(messages[style_name], parse_mode="Markdown")
 
 
 async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style(update, context, "cinematic")
+    await set_style_handler(update, context, "cinematic")
 
 
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style(update, context, "anime")
+    await set_style_handler(update, context, "anime")
 
 
 async def enhance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style(update, context, "enhance")
+    await set_style_handler(update, context, "enhance")
 
 
 async def removebg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await set_style(update, context, "removebg")
+    await set_style_handler(update, context, "removebg")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -166,15 +213,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if style_name and style_name in STYLES:
         style_prompt = STYLES[style_name]
-        style_label = style_name
+        style_label = STYLE_LABELS[style_name]
     elif update.message.caption:
-        style_prompt = update.message.caption
-        style_label = update.message.caption
+        style_prompt = (
+            f"{update.message.caption}, cinematic composition, "
+            "professional quality, visually stunning, high detail"
+        )
+        style_label = f'Custom: "{update.message.caption}"'
     else:
         style_prompt = STYLES["cinematic"]
-        style_label = "cinematic"
+        style_label = STYLE_LABELS["cinematic"]
 
-    await update.message.reply_text("🎨 Generating your AI poster… this takes ~15 seconds.")
+    await update.message.reply_text(
+        "🎨 Generating your AI image… this takes ~15 seconds. Please wait!"
+    )
 
     photo = update.message.photo[-1]
     tg_file = await context.bot.get_file(photo.file_id)
@@ -183,9 +235,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         poster_bytes = await generate_poster(image_bytes, style_prompt)
     except Exception as e:
-        logger.error("Poster generation failed: %s", e)
+        logger.error("Image generation failed: %s", e)
         await update.message.reply_text(
-            "❌ Something went wrong generating your poster. Please try again."
+            "❌ Something went wrong generating your image. Please try again.\n"
+            "If the problem persists, try a different style or photo."
         )
         return
 
@@ -193,19 +246,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.message.reply_photo(
         photo=io.BytesIO(poster_bytes),
-        caption=f"🎨 Style: {style_label}\n\nSend another photo or pick a new style!",
+        caption=(
+            f"✅ *Done!* Style: {style_label}\n\n"
+            "Send another photo or pick a new style with /cinematic, /anime, /enhance, or /removebg"
+        ),
+        parse_mode="Markdown",
     )
 
 
 async def post_init(app) -> None:
     await app.bot.set_my_commands([
-        BotCommand("start",    "Welcome & reset style"),
-        BotCommand("help",     "Show all commands"),
-        BotCommand("about",    "About this bot"),
-        BotCommand("cinematic","🎬 Hollywood movie poster style"),
-        BotCommand("anime",    "🌸 Anime illustration style"),
-        BotCommand("enhance",  "✨ Ultra-HD enhancement style"),
-        BotCommand("removebg", "🪄 White background cutout style"),
+        BotCommand("start",     "🚀 Welcome to Bio Fundz Bot & reset style"),
+        BotCommand("help",      "📖 Show all commands & how to use the bot"),
+        BotCommand("about",     "🌍 About Bio Fundz Bot, mission & creator"),
+        BotCommand("cinematic", "🎬 Hollywood movie poster from your photo"),
+        BotCommand("anime",     "🌸 Anime & manga artwork from your photo"),
+        BotCommand("enhance",   "✨ HD upscale, face & lighting enhancement"),
+        BotCommand("removebg",  "🪄 Remove background, clean white version"),
     ])
     logger.info("Bot commands registered with Telegram")
 

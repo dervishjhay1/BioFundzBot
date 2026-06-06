@@ -817,3 +817,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+HF_TOKEN = os.environ["HUGGINGFACE_API_KEY"]

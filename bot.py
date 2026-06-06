@@ -6,7 +6,6 @@ import base64
 import httpx
 from datetime import date
 from pathlib import Path
-from openai import OpenAI
 from telegram import (
     Update,
     BotCommand,

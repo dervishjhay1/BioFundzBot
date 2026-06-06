@@ -2,3 +2,8 @@ python-telegram-bot==20.7
 requests
 python-dotenv
 huggingface_hub
+python-telegram-bot==20.7
+requests
+python-dotenv
+huggingface_hub
+Pillow

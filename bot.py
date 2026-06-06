@@ -29,7 +29,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 ADMIN_ID = int(os.environ.get("ADMIN_USER_ID", "0"))
 
 FREE_DAILY_LIMIT = 3

@@ -1,167 +1,373 @@
 import os
 import io
+import json
 import logging
-import requests
+from pathlib import Path
+from datetime import date
 
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+import requests
+from PIL import Image
+from telegram import (
+Update,
+BotCommand,
+InlineKeyboardButton,
+InlineKeyboardMarkup,
+ReplyKeyboardMarkup,
+KeyboardButton,
 )
+from telegram.ext import (
+ApplicationBuilder,
+CommandHandler,
+MessageHandler,
+CallbackQueryHandler,
+ContextTypes,
+filters,
+)
+
+=========================
+
+LOGGING
+
+=========================
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+level=logging.INFO
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-HF_TOKEN = os.environ.get("HUGGINGFACE_API_KEY")
+=========================
+
+ENV VARIABLES
+
+=========================
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+
+if not BOT_TOKEN:
+raise ValueError("TELEGRAM_BOT_TOKEN is missing")
+
+if not HF_TOKEN:
+raise ValueError("HUGGINGFACE_API_KEY is missing")
+
+=========================
+
+FILES
+
+=========================
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+USERS_FILE = DATA_DIR / "users.json"
+USAGE_FILE = DATA_DIR / "usage.json"
+VIP_FILE = DATA_DIR / "vip.json"
+
+FREE_DAILY_LIMIT = 3
+
+=========================
+
+STYLES
+
+=========================
 
 STYLE_PROMPTS = {
-    "cinematic": "cinematic hollywood movie poster style",
-    "anime": "anime manga style artwork",
-    "enhance": "ultra realistic hd enhancement",
-    "removebg": "white clean background"
+"cinematic": "cinematic hollywood movie poster, dramatic lighting, ultra realistic",
+"anime": "anime style artwork, studio ghibli, detailed anime illustration",
+"enhance": "ultra detailed hd enhancement, sharp realistic photo",
+"removebg": "clean white background portrait"
 }
 
+STYLE_NAMES = {
+"cinematic": "🎬 Cinematic",
+"anime": "🌸 Anime",
+"enhance": "✨ Enhance",
+"removebg": "🪄 Remove BG",
+}
 
-# =========================
-# START COMMAND
-# =========================
+=========================
+
+HELPERS
+
+=========================
+
+def load_json(path):
+if path.exists():
+try:
+return json.loads(path.read_text())
+except:
+return {}
+return {}
+
+def save_json(path, data):
+path.write_text(json.dumps(data, indent=2))
+
+def is_vip(user_id):
+vip = load_json(VIP_FILE)
+return str(user_id) in vip
+
+def get_usage(user_id):
+usage = load_json(USAGE_FILE)
+today = str(date.today())
+return usage.get(str(user_id), {}).get(today, 0)
+
+def increment_usage(user_id):
+usage = load_json(USAGE_FILE)
+today = str(date.today())
+
+if str(user_id) not in usage:
+    usage[str(user_id)] = {}
+
+if today not in usage[str(user_id)]:
+    usage[str(user_id)][today] = 0
+
+usage[str(user_id)][today] += 1
+
+save_json(USAGE_FILE, usage)
+
+def can_generate(user_id):
+if user_id == ADMIN_ID:
+return True
+
+if is_vip(user_id):
+    return True
+
+return get_usage(user_id) < FREE_DAILY_LIMIT
+
+def remaining(user_id):
+if user_id == ADMIN_ID or is_vip(user_id):
+return "∞"
+
+left = FREE_DAILY_LIMIT - get_usage(user_id)
+return str(max(left, 0))
+
+=========================
+
+KEYBOARDS
+
+=========================
+
+def main_keyboard():
+return ReplyKeyboardMarkup(
+[
+[KeyboardButton("🎬 Cinematic"), KeyboardButton("🌸 Anime")],
+[KeyboardButton("✨ Enhance"), KeyboardButton("🪄 Remove BG")],
+[KeyboardButton("📖 Help"), KeyboardButton("⭐ Status")]
+],
+resize_keyboard=True
+)
+
+def style_keyboard():
+return InlineKeyboardMarkup([
+[
+InlineKeyboardButton("🎬 Cinematic", callback_data="cinematic"),
+InlineKeyboardButton("🌸 Anime", callback_data="anime"),
+],
+[
+InlineKeyboardButton("✨ Enhance", callback_data="enhance"),
+InlineKeyboardButton("🪄 Remove BG", callback_data="removebg"),
+]
+])
+
+=========================
+
+IMAGE GENERATION
+
+=========================
+
+def generate_image(prompt):
+API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+
+headers = {
+    "Authorization": f"Bearer {HF_TOKEN}"
+}
+
+response = requests.post(
+    API_URL,
+    headers=headers,
+    json={"inputs": prompt},
+    timeout=120
+)
+
+if response.status_code != 200:
+    raise Exception(response.text)
+
+return response.content
+
+=========================
+
+COMMANDS
+
+=========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🚀 Welcome to Biodun Fundz Bot\n\n"
-        "Available Commands:\n"
-        "/cinematic\n"
-        "/anime\n"
-        "/enhance\n"
-        "/removebg\n\n"
-        "Send a photo after choosing a style."
-    )
+context.user_data.clear()
 
-    await update.message.reply_text(text)
+await update.message.reply_text(
+    "🚀 Welcome to Biodun Fundz Bot!\n\n"
+    "Send a photo and choose a style.",
+    reply_markup=main_keyboard()
+)
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+await update.message.reply_text(
+"📖 Commands:\n\n"
+"/start - Restart bot\n"
+"/help - Help menu\n"
+"/status - Check remaining generations",
+reply_markup=main_keyboard()
+)
 
-# =========================
-# STYLE COMMANDS
-# =========================
-async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["style"] = "cinematic"
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+left = remaining(update.effective_user.id)
+
+await update.message.reply_text(
+    f"📊 Remaining generations today: {left}",
+    reply_markup=main_keyboard()
+)
+
+=========================
+
+TEXT HANDLER
+
+=========================
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+text = update.message.text
+
+if text == "📖 Help":
+    await help_command(update, context)
+    return
+
+if text == "⭐ Status":
+    await status(update, context)
+    return
+
+button_map = {
+    "🎬 Cinematic": "cinematic",
+    "🌸 Anime": "anime",
+    "✨ Enhance": "enhance",
+    "🪄 Remove BG": "removebg",
+}
+
+if text in button_map:
+    context.user_data["style"] = button_map[text]
+
     await update.message.reply_text(
-        "🎬 Cinematic mode activated.\nNow send your photo."
+        f"Send your image for {text}"
     )
 
+=========================
 
-async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["style"] = "anime"
-    await update.message.reply_text(
-        "🌸 Anime mode activated.\nNow send your photo."
-    )
+PHOTO HANDLER
 
+=========================
 
-async def enhance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["style"] = "enhance"
-    await update.message.reply_text(
-        "✨ Enhance mode activated.\nNow send your photo."
-    )
-
-
-async def removebg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["style"] = "removebg"
-    await update.message.reply_text(
-        "🪄 Remove background mode activated.\nNow send your photo."
-    )
-
-
-# =========================
-# IMAGE GENERATION
-# =========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    style = context.user_data.get("style")
+user_id = update.effective_user.id
 
-    if not style:
-        await update.message.reply_text(
-            "Please choose a style first.\nExample: /anime"
-        )
-        return
+if not can_generate(user_id):
+    await update.message.reply_text(
+        "🚫 Daily limit reached."
+    )
+    return
 
-    await update.message.reply_text("🎨 Processing image...")
+style = context.user_data.get("style", "cinematic")
 
-    photo = update.message.photo[-1]
+await update.message.reply_text(
+    "🎨 Generating image..."
+)
 
-    file = await context.bot.get_file(photo.file_id)
+photo = update.message.photo[-1]
 
-    image_bytes = await file.download_as_bytearray()
+file = await context.bot.get_file(photo.file_id)
 
-    prompt = STYLE_PROMPTS.get(style)
+image_bytes = requests.get(file.file_path).content
 
-    try:
+prompt = STYLE_PROMPTS.get(style)
 
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
-            headers={
-                "Authorization": f"Bearer {HF_TOKEN}"
-            },
-            json={
-                "inputs": prompt
-            },
-            timeout=120
-        )
+try:
+    generated = generate_image(prompt)
 
-        if response.status_code != 200:
-            await update.message.reply_text(
-                f"❌ Error from HuggingFace:\n{response.text}"
-            )
-            return
+    increment_usage(user_id)
 
-        image = response.content
-
-        await update.message.reply_photo(
-            photo=io.BytesIO(image),
-            caption=f"✅ {style.capitalize()} image generated!"
-        )
-
-    except Exception as e:
-        logger.error(str(e))
-
-        await update.message.reply_text(
-            f"❌ Error:\n{str(e)}"
-        )
-
-
-# =========================
-# MAIN
-# =========================
-def main():
-
-    if not BOT_TOKEN:
-        raise ValueError("TELEGRAM_BOT_TOKEN missing")
-
-    if not HF_TOKEN:
-        raise ValueError("HUGGINGFACE_API_KEY missing")
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("cinematic", cinematic))
-    app.add_handler(CommandHandler("anime", anime))
-    app.add_handler(CommandHandler("enhance", enhance))
-    app.add_handler(CommandHandler("removebg", removebg))
-
-    app.add_handler(
-        MessageHandler(filters.PHOTO, handle_photo)
+    await update.message.reply_photo(
+        photo=io.BytesIO(generated),
+        caption=f"✅ Done! Style: {STYLE_NAMES[style]}"
     )
 
-    logger.info("Bot started...")
+except Exception as e:
+    logger.error(e)
 
-    app.run_polling()
+    await update.message.reply_text(
+        "❌ Generation failed."
+    )
 
+=========================
 
-if __name__ == "__main__":
-    main()
+CALLBACKS
+
+=========================
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+query = update.callback_query
+await query.answer()
+
+style = query.data
+
+context.user_data["style"] = style
+
+await query.message.reply_text(
+    f"✅ {STYLE_NAMES[style]} selected.\n\nNow send your image."
+)
+
+=========================
+
+POST INIT
+
+=========================
+
+async def post_init(app):
+
+await app.bot.set_my_commands([
+    BotCommand("start", "Start bot"),
+    BotCommand("help", "Help"),
+    BotCommand("status", "Usage status"),
+])
+
+=========================
+
+MAIN
+
+=========================
+
+def main():
+
+app = (
+    ApplicationBuilder()
+    .token(BOT_TOKEN)
+    .post_init(post_init)
+    .build()
+)
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("help", help_command))
+app.add_handler(CommandHandler("status", status))
+
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
+app.add_handler(CallbackQueryHandler(callback_handler))
+
+logger.info("Bot started")
+
+app.run_polling()
+
+if name == "main":
+main()
